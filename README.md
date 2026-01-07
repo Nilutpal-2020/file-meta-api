@@ -4,12 +4,15 @@ A high-performance file metadata extraction API built with Go. Upload files and 
 
 ## Features
 
+- 🔍 **Comprehensive Metadata Extraction**:
+  - **Images**: Dimensions, EXIF data (camera info, GPS, settings)
+  - **Audio**: ID3 tags (artist, album, track info, genre)
+  - **All Files**: SHA256 checksum, MIME type, file size
 - 🔐 **API Key Authentication** - Secure access with API key validation
-- ⚡ **Rate Limiting** - Token bucket algorithm to prevent abuse
-- 🔍 **Metadata Extraction** - Automatic detection of MIME types and file properties
+- ⚡ **Rate Limiting** - Token bucket algorithm (in-memory or Redis)
 - 🔒 **SHA256 Checksums** - Cryptographic hash generation for file integrity
 - 📦 **Multi-format Support** - Automatic file type detection via magic bytes
-- 🚀 **Fast & Lightweight** - Minimal dependencies, optimized for performance
+- 🚀 **Fast & Lightweight** - Optimized for performance
 
 ## Quick Start
 
@@ -291,7 +294,11 @@ For issues and questions:
 
 ## Roadmap
 
-- [ ] Support for additional metadata formats (EXIF, ID3, etc.)
+- [x] EXIF data extraction for images
+- [x] ID3 tag extraction for audio files  
+- [x] Image dimensions for all image types
+- [ ] Video metadata (codec, duration, resolution)
+- [ ] Document metadata (PDF, Office files)
 - [ ] Webhook notifications for async processing
 - [ ] Batch file processing
 - [ ] Cloud storage integration (S3, GCS)
