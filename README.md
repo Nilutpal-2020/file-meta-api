@@ -224,15 +224,48 @@ docker run -p 8080:8080 --env-file .env file-meta:latest
 docker-compose up
 ```
 
+## Deployment
+
+### Deploy to Render
+
+The easiest way to deploy this application is using [Render](https://render.com):
+
+1. Push your code to GitHub
+2. Connect your repository to Render
+3. Add environment variables (`API_KEYS`, `REDIS_URL`)
+4. Deploy!
+
+See [RENDER_QUICKSTART.md](RENDER_QUICKSTART.md) for a 5-minute guide or [docs/RENDER_DEPLOYMENT.md](docs/RENDER_DEPLOYMENT.md) for complete instructions.
+
+**Benefits:**
+- Free tier available
+- No file size limits
+- Full Go server support
+- Auto-deploy from GitHub
+- Free SSL certificates
+- Built-in Redis available
+
+### Other Deployment Options
+
+- **Railway**: Similar to Render, great for Go apps
+- **Fly.io**: Deploy globally with their CLI
+- **DigitalOcean App Platform**: Managed platform with Redis
+- **Docker**: Deploy anywhere with the included Dockerfile
+
 ## Rate Limiting
 
 The API implements token bucket rate limiting:
 
 - **Default Limit:** 10 requests per minute per API key
 - **Algorithm:** Token bucket with automatic refill
+- **Storage**: In-memory (local) or Redis (distributed)
 - **Response Headers:** Rate limit information included in responses
 
-When rate limited, you'll receive a `429 Too Many Requests` status code.
+**Redis Integration:**
+- Set `REDIS_URL` environment variable to enable distributed rate limiting
+- Recommended for production deployments
+- Required when running multiple instances
+- Falls back to in-memory if Redis is unavailable
 
 ## Security Considerations
 

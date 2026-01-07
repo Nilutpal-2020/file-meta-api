@@ -14,6 +14,8 @@ import (
 	"file-meta/internal/logger"
 	"file-meta/internal/models"
 	"file-meta/middleware"
+
+	"github.com/redis/go-redis/v9"
 )
 
 func main() {
@@ -27,6 +29,39 @@ func main() {
 	log := logger.New(cfg.LogLevel)
 	log.Infof("Starting file-meta server in %s mode", cfg.Environment)
 
+	// Initialize Redis client (optional)
+	var redisClient *redis.Client
+	if cfg.RedisURL != "" || cfg.RedisHost != "" {
+		if cfg.RedisURL != "" {
+			// Use Redis URL if provided
+			opt, err := redis.ParseURL(cfg.RedisURL)
+			if err != nil {
+				log.Warnf("Failed to parse Redis URL: %v", err)
+			} else {
+				redisClient = redis.NewClient(opt)
+			}
+		} else {
+			// Use individual Redis settings
+			redisClient = redis.NewClient(&redis.Options{
+				Addr:     cfg.RedisHost + ":" + cfg.RedisPort,
+				Password: cfg.RedisPassword,
+				DB:       cfg.RedisDB,
+			})
+		}
+
+		// Test Redis connection
+		if redisClient != nil {
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			if err := redisClient.Ping(ctx).Err(); err != nil {
+				log.Warnf("Redis connection failed, using in-memory rate limiting: %v", err)
+				redisClient = nil
+			} else {
+				log.Info("Successfully connected to Redis for distributed rate limiting")
+			}
+		}
+	}
+
 	// Create router
 	mux := http.NewServeMux()
 
@@ -36,10 +71,18 @@ func main() {
 		json.NewEncoder(w).Encode(models.HealthResponse{Status: "ok"})
 	})
 
+	// Choose rate limiting strategy
+	var rateLimitMiddleware func(http.Handler) http.Handler
+	if redisClient != nil {
+		rateLimitMiddleware = middleware.RedisRateLimit(cfg, log, redisClient)
+	} else {
+		rateLimitMiddleware = middleware.RateLimit(cfg, log)
+	}
+
 	// Metadata endpoint with middleware chain
 	handler := middleware.Recovery(log)(
 		middleware.RequestLogger(log)(
-			middleware.RateLimit(cfg, log)(
+			rateLimitMiddleware(
 				middleware.APIKeyAuth(cfg, log)(
 					http.HandlerFunc(handlers.MetadataHandler(cfg, log)),
 				),
