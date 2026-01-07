@@ -17,6 +17,11 @@ type Config struct {
 	RateLimitWindow   time.Duration
 	LogLevel          string
 	Environment       string
+	RedisURL          string
+	RedisHost         string
+	RedisPort         string
+	RedisPassword     string
+	RedisDB           int
 }
 
 // Load reads configuration from environment variables
@@ -27,6 +32,11 @@ func Load() (*Config, error) {
 		RateLimitRequests: int(getEnvAsInt("RATE_LIMIT_REQUESTS", 10)),
 		LogLevel:          getEnv("LOG_LEVEL", "info"),
 		Environment:       getEnv("ENV", "development"),
+		RedisURL:          os.Getenv("REDIS_URL"),
+		RedisHost:         getEnv("REDIS_HOST", "localhost"),
+		RedisPort:         getEnv("REDIS_PORT", "6379"),
+		RedisPassword:     os.Getenv("REDIS_PASSWORD"),
+		RedisDB:           int(getEnvAsInt("REDIS_DB", 0)),
 	}
 
 	// Parse rate limit window

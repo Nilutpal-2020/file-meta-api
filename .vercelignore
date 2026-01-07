@@ -1,0 +1,49 @@
+# Build artifacts
+file-meta
+*.exe
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+
+# Dependencies
+vendor/
+
+# Test files
+coverage.html
+coverage.xml
+
+# Environment
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+logs/
+
+# Temporary
+tmp/
+temp/
+
+# macOS
+.DS_Store
+
+# Development
+Makefile
+docker-compose.yml
+Dockerfile
+.dockerignore
+
+# Documentation (optional, include if you want)
+# docs/
+# *.md
