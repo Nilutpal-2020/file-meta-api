@@ -1,0 +1,25 @@
+version: '3.8'
+
+services:
+  file-meta:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: file-meta
+    ports:
+      - "8080:8080"
+    env_file:
+      - .env
+    environment:
+      - PORT=8080
+      - LOG_LEVEL=info
+    restart: unless-stopped
+    healthcheck:
+      test: [ "CMD", "/app/file-meta", "health" ]
+      interval: 30s
+      timeout: 3s
+      retries: 3
+      start_period: 5s
+    # Uncomment for volume mounting during development
+    # volumes:
+    #   - ./uploads:/app/uploads

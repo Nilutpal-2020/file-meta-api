@@ -1,0 +1,41 @@
+# Git
+.git
+.gitignore
+
+# CI/CD
+.github
+
+# Documentation
+*.md
+!README.md
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# IDE
+.vscode
+.idea
+*.swp
+*.swo
+
+# Build artifacts
+file-meta
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Test files
+*.test
+coverage.out
+coverage.html
+
+# Temporary files
+tmp/
+temp/
+logs/
+
+# macOS
+.DS_Store
