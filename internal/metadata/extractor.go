@@ -20,14 +20,23 @@ import (
 
 // Result represents file metadata extraction result
 type Result struct {
-	Filename  string         `json:"filename"`
-	SizeBytes int64          `json:"size_bytes"`
-	MimeType  string         `json:"mime_type"`
-	SHA256    string         `json:"checksum_sha256"`
-	Extension string         `json:"extension,omitempty"`
-	Image     *ImageMetadata `json:"image,omitempty"`
-	Audio     *AudioMetadata `json:"audio,omitempty"`
-	Video     *VideoMetadata `json:"video,omitempty"`
+	Filename  string            `json:"filename"`
+	SizeBytes int64             `json:"size_bytes"`
+	MimeType  string            `json:"mime_type"`
+	SHA256    string            `json:"checksum_sha256"`
+	Extension string            `json:"extension,omitempty"`
+	Image     *ImageMetadata    `json:"image,omitempty"`
+	Audio     *AudioMetadata    `json:"audio,omitempty"`
+	Video     *VideoMetadata    `json:"video,omitempty"`
+	Document  *DocumentMetadata `json:"document,omitempty"`
+}
+
+// DocumentMetadata contains text/code specific metadata
+type DocumentMetadata struct {
+	LineCount int    `json:"line_count"`
+	WordCount int    `json:"word_count"`
+	Language  string `json:"language,omitempty"`
+	Encoding  string `json:"encoding,omitempty"`
 }
 
 // ImageMetadata contains image-specific metadata
@@ -155,18 +164,24 @@ func Extract(file multipart.File, header *multipart.FileHeader) (*Result, error)
 
 	// Extract type-specific metadata
 	if strings.HasPrefix(mime, "image/") {
-		result.Image = extractImageMetadata(file, mime)
+		result.Image = extractImageMetadata(file, mime, header.Filename)
 	} else if strings.HasPrefix(mime, "audio/") {
 		result.Audio = extractAudioMetadata(file)
 	} else if strings.HasPrefix(mime, "video/") {
 		result.Video = extractVideoMetadata(file)
+	} else {
+		// Try to extract document metadata for text/code files or unknown types
+		doc := extractDocumentMetadata(file, header.Filename)
+		if doc != nil && (strings.HasPrefix(mime, "text/") || doc.Language != "Unknown") {
+			result.Document = doc
+		}
 	}
 
 	return result, nil
 }
 
 // extractImageMetadata extracts EXIF and basic image metadata
-func extractImageMetadata(file multipart.File, mimeType string) *ImageMetadata {
+func extractImageMetadata(file multipart.File, mimeType, filename string) *ImageMetadata {
 	metadata := &ImageMetadata{}
 
 	// Try to decode image for dimensions
@@ -266,7 +281,7 @@ func extractImageMetadata(file multipart.File, mimeType string) *ImageMetadata {
 	}
 
 	// Perform screenshot detection first
-	metadata.ScreenshotDetection = detectScreenshot(metadata)
+	metadata.ScreenshotDetection = detectScreenshot(metadata, filename)
 
 	// Perform AI detection analysis (which will consider screenshot detection)
 	metadata.AIDetection = detectAIGenerated(metadata, exifData)
@@ -333,6 +348,78 @@ func extractVideoMetadata(file multipart.File) *VideoMetadata {
 	// For now, we'll return a placeholder
 	// In production, consider using ffmpeg bindings or similar
 	return nil
+}
+
+// extractDocumentMetadata extracts text/code properties
+func extractDocumentMetadata(file multipart.File, filename string) *DocumentMetadata {
+	if seeker, ok := file.(io.Seeker); ok {
+		seeker.Seek(0, 0)
+	}
+
+	// Read first 1MB for analysis to avoid memory issues with huge files
+	// but enough to get good stats
+	buf := make([]byte, 1024*1024)
+	n, err := file.Read(buf)
+	if err != nil && err != io.EOF {
+		return nil
+	}
+	content := string(buf[:n])
+
+	metadata := &DocumentMetadata{
+		Encoding: "UTF-8", // Default assumption, could use library to detect
+	}
+
+	// Count lines
+	metadata.LineCount = strings.Count(content, "\n") + 1
+	if n == 0 {
+		metadata.LineCount = 0
+	}
+
+	// Count words (simple approximation)
+	metadata.WordCount = len(strings.Fields(content))
+
+	// Detect language based on extension
+	ext := strings.ToLower(filepath.Ext(filename))
+	switch ext {
+	case ".go":
+		metadata.Language = "Go"
+	case ".py":
+		metadata.Language = "Python"
+	case ".js", ".jsx":
+		metadata.Language = "JavaScript"
+	case ".ts", ".tsx":
+		metadata.Language = "TypeScript"
+	case ".html":
+		metadata.Language = "HTML"
+	case ".css":
+		metadata.Language = "CSS"
+	case ".md":
+		metadata.Language = "Markdown"
+	case ".json":
+		metadata.Language = "JSON"
+	case ".xml":
+		metadata.Language = "XML"
+	case ".yaml", ".yml":
+		metadata.Language = "YAML"
+	case ".sql":
+		metadata.Language = "SQL"
+	case ".sh", ".bash":
+		metadata.Language = "Shell"
+	case ".c":
+		metadata.Language = "C"
+	case ".cpp", ".cc":
+		metadata.Language = "C++"
+	case ".java":
+		metadata.Language = "Java"
+	case ".rs":
+		metadata.Language = "Rust"
+	case ".txt":
+		metadata.Language = "Plain Text"
+	default:
+		metadata.Language = "Unknown"
+	}
+
+	return metadata
 }
 
 // detectAIGenerated analyzes image metadata to detect if it's likely AI-generated
@@ -444,7 +531,7 @@ func detectAIGenerated(metadata *ImageMetadata, exifData *exif.Exif) *AIDetectio
 }
 
 // detectScreenshot analyzes image dimensions and metadata to detect screenshots
-func detectScreenshot(metadata *ImageMetadata) *ScreenshotDetection {
+func detectScreenshot(metadata *ImageMetadata, filename string) *ScreenshotDetection {
 	detection := &ScreenshotDetection{
 		LikelyScreenshot: false,
 		Confidence:       "low",
@@ -453,6 +540,26 @@ func detectScreenshot(metadata *ImageMetadata) *ScreenshotDetection {
 
 	if metadata.Width == 0 || metadata.Height == 0 {
 		return detection
+	}
+
+	// Check 0: Filename patterns (Strongest indicator for OS screenshots)
+	filenameLower := strings.ToLower(filename)
+
+	// macOS: "Screenshot 2023-01-01 at 10.00.00.png" or "Screen Shot..."
+	if strings.Contains(filenameLower, "screen shot") || strings.Contains(filenameLower, "screenshot") {
+		// Check for specific macOS/Windows patterns
+		if strings.Contains(filenameLower, " at ") || // macOS
+			strings.Contains(filenameLower, " (") { // Windows "Screenshot (1).png"
+			detection.LikelyScreenshot = true
+			detection.Confidence = "high"
+			detection.Indicators = append(detection.Indicators, "filename_pattern_match")
+			detection.MatchedPattern = "Filename matches OS screenshot pattern"
+			// We return immediately if it's a known filename pattern, as this is very strong evidence
+			return detection
+		}
+
+		// Generic "screenshot" in name
+		detection.Indicators = append(detection.Indicators, "filename_contains_screenshot")
 	}
 
 	// Common screenshot software signatures
@@ -498,18 +605,21 @@ func detectScreenshot(metadata *ImageMetadata) *ScreenshotDetection {
 		{2560, 1080, "UltraWide Full HD"},
 		{3440, 1440, "UltraWide QHD"},
 
-		// Retina and high DPI
+		// Retina and high DPI (Apple)
 		{2880, 1800, "MacBook Pro 15\" Retina"},
 		{2560, 1600, "MacBook Pro 13\" Retina"},
 		{3024, 1964, "MacBook Pro 14\" Retina"},
 		{3456, 2234, "MacBook Pro 16\" Retina"},
 		{2304, 1440, "MacBook Air Retina"},
+		{5120, 2880, "iMac 5K Retina"},
+		{4480, 2520, "iMac 24\" Retina"},
 
 		// iPad and tablets
 		{2048, 1536, "iPad Retina"},
 		{2732, 2048, "iPad Pro 12.9\""},
 		{2388, 1668, "iPad Pro 11\""},
 		{1920, 1200, "Tablet WUXGA"},
+		{1640, 2360, "iPad Air"},
 
 		// Mobile devices
 		{1920, 1200, "Mobile Full HD"},
@@ -517,6 +627,10 @@ func detectScreenshot(metadata *ImageMetadata) *ScreenshotDetection {
 		{2400, 1080, "Mobile Full HD+"},
 		{1080, 2340, "Mobile Full HD+ Portrait"},
 		{1080, 2400, "Mobile Full HD+ Portrait"},
+		{2532, 1170, "iPhone 12/13/14"},
+		{2778, 1284, "iPhone 12/13/14 Pro Max"},
+		{2796, 1290, "iPhone 15/16 Pro Max"},
+		{2556, 1179, "iPhone 15/16 Pro"},
 
 		// Legacy and others
 		{1024, 768, "XGA"},
@@ -554,12 +668,16 @@ func detectScreenshot(metadata *ImageMetadata) *ScreenshotDetection {
 	for _, ar := range commonAspectRatios {
 		if (aspectRatio >= ar.ratio-ar.tolerance && aspectRatio <= ar.ratio+ar.tolerance) ||
 			(1/aspectRatio >= ar.ratio-ar.tolerance && 1/aspectRatio <= ar.ratio+ar.tolerance) {
-			// Found matching aspect ratio
 
-			// Check if dimensions are "screen-like" (multiples of common values)
+			// Check if dimensions are "screen-like"
 			if isScreenLikeDimension(width, height) {
 				detection.LikelyScreenshot = true
-				detection.Confidence = "medium"
+				// If we already have a filename hint, upgrade to high, otherwise medium
+				if len(detection.Indicators) > 0 {
+					detection.Confidence = "high"
+				} else {
+					detection.Confidence = "medium"
+				}
 				detection.Indicators = append(detection.Indicators, "screen_aspect_ratio")
 				detection.MatchedPattern = fmt.Sprintf("%dx%d (Aspect ratio: %s)", width, height, ar.name)
 				return detection
@@ -575,12 +693,22 @@ func detectScreenshot(metadata *ImageMetadata) *ScreenshotDetection {
 
 			if (width == scaledW && height == scaledH) || (width == scaledH && height == scaledW) {
 				detection.LikelyScreenshot = true
-				detection.Confidence = "medium"
+				if len(detection.Indicators) > 0 {
+					detection.Confidence = "high"
+				} else {
+					detection.Confidence = "medium"
+				}
 				detection.Indicators = append(detection.Indicators, "scaled_screen_resolution")
 				detection.MatchedPattern = fmt.Sprintf("%dx%d (%.0f%% of %s)", width, height, scale*100, res.name)
 				return detection
 			}
 		}
+	}
+
+	// If we had a weak filename match but no resolution match, potential screenshot
+	if len(detection.Indicators) > 0 {
+		detection.LikelyScreenshot = true
+		detection.Confidence = "low"
 	}
 
 	return detection

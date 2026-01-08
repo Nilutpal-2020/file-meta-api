@@ -96,6 +96,20 @@ func TestExtract(t *testing.T) {
 				if result.MimeType == "" {
 					t.Error("Extract() MimeType should not be empty")
 				}
+
+				// Check Document metadata for text/code files
+				if strings.HasPrefix(tt.contentType, "text/") || strings.Contains(tt.contentType, "json") {
+					if result.Document == nil {
+						t.Errorf("Extract() Document metadata is nil for %s", tt.name)
+					} else {
+						if len(tt.content) > 0 && result.Document.LineCount == 0 {
+							t.Errorf("Extract() Document LineCount is 0 for %s", tt.name)
+						}
+						if result.Document.Language == "" {
+							t.Errorf("Extract() Document Language is empty for %s", tt.name)
+						}
+					}
+				}
 			}
 		})
 	}
@@ -274,6 +288,7 @@ func TestDetectScreenshot(t *testing.T) {
 	tests := []struct {
 		name               string
 		metadata           *ImageMetadata
+		filename           string // Added filename field
 		expectedScreenshot bool
 		expectedConfidence string
 		expectedPattern    string
@@ -386,11 +401,26 @@ func TestDetectScreenshot(t *testing.T) {
 			expectedConfidence: "high",
 			expectedPattern:    "2340x1080", // Detection normalizes to landscape orientation
 		},
+		{
+			name: "macOS screenshot filename match",
+			metadata: &ImageMetadata{
+				Width:  1000, // Random dimensions
+				Height: 1000,
+			},
+			filename:           "Screenshot 2023-01-01 at 10.00.00.png",
+			expectedScreenshot: true,
+			expectedConfidence: "high",
+			expectedPattern:    "Filename matches OS screenshot pattern",
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			detection := detectScreenshot(tt.metadata)
+			filename := "test.png"
+			if tt.filename != "" {
+				filename = tt.filename
+			}
+			detection := detectScreenshot(tt.metadata, filename)
 
 			if detection == nil {
 				t.Fatal("detectScreenshot returned nil")
@@ -484,7 +514,7 @@ func TestScreenshotAndAIDetectionIntegration(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			// First detect screenshot
-			screenshotDetection := detectScreenshot(tt.metadata)
+			screenshotDetection := detectScreenshot(tt.metadata, "test.png")
 			tt.metadata.ScreenshotDetection = screenshotDetection
 
 			// Then detect AI (which considers screenshot detection)

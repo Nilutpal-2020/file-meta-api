@@ -19,7 +19,12 @@ The detection uses a **multi-layered pattern matching system** that checks:
 
 ### Detection Methods
 
-1. **Software Signature Detection** (Immediate High Confidence)
+1. **Filename Pattern Analysis** (Immediate High Confidence)
+   - Checks for OS-specific screenshot filename patterns
+   - macOS: `Screenshot YYYY-MM-DD at HH.MM.SS.png` or `Screen Shot...`
+   - Windows: `Screenshot (N).png`
+
+2. **Software Signature Detection** (Immediate High Confidence)
    - Checks EXIF Software field for screenshot tool signatures
    - Detected keywords: `screenshot`, `snipping tool`, `greenshot`, `lightshot`, `sharex`, `flameshot`, `spectacle`, `monosnap`, etc.
 
