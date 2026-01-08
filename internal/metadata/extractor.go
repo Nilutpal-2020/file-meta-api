@@ -32,17 +32,19 @@ type Result struct {
 
 // ImageMetadata contains image-specific metadata
 type ImageMetadata struct {
-	Width       int      `json:"width,omitempty"`
-	Height      int      `json:"height,omitempty"`
-	ColorModel  string   `json:"color_model,omitempty"`
-	Make        string   `json:"make,omitempty"`
-	Model       string   `json:"model,omitempty"`
-	DateTime    string   `json:"datetime,omitempty"`
-	Orientation int      `json:"orientation,omitempty"`
-	Flash       string   `json:"flash,omitempty"`
-	FocalLength string   `json:"focal_length,omitempty"`
-	ISOSpeed    int      `json:"iso_speed,omitempty"`
-	GPS         *GPSData `json:"gps,omitempty"`
+	Width       int          `json:"width,omitempty"`
+	Height      int          `json:"height,omitempty"`
+	ColorModel  string       `json:"color_model,omitempty"`
+	Make        string       `json:"make,omitempty"`
+	Model       string       `json:"model,omitempty"`
+	DateTime    string       `json:"datetime,omitempty"`
+	Orientation int          `json:"orientation,omitempty"`
+	Flash       string       `json:"flash,omitempty"`
+	FocalLength string       `json:"focal_length,omitempty"`
+	ISOSpeed    int          `json:"iso_speed,omitempty"`
+	GPS         *GPSData     `json:"gps,omitempty"`
+	AIDetection *AIDetection `json:"ai_detection,omitempty"`
+	Software    string       `json:"software,omitempty"`
 }
 
 // GPSData contains GPS coordinates
@@ -50,6 +52,14 @@ type GPSData struct {
 	Latitude  float64 `json:"latitude,omitempty"`
 	Longitude float64 `json:"longitude,omitempty"`
 	Altitude  float64 `json:"altitude,omitempty"`
+}
+
+// AIDetection contains AI-generation detection results
+type AIDetection struct {
+	LikelyAIGenerated bool     `json:"likely_ai_generated"`
+	Confidence        string   `json:"confidence"` // "high", "medium", "low"
+	Indicators        []string `json:"indicators,omitempty"`
+	Reasons           []string `json:"reasons,omitempty"`
 }
 
 // AudioMetadata contains audio-specific metadata
@@ -164,6 +174,7 @@ func extractImageMetadata(file multipart.File, mimeType string) *ImageMetadata {
 	}
 
 	// Try to extract EXIF data (JPEG images)
+	var exifData *exif.Exif
 	if strings.Contains(mimeType, "jpeg") || strings.Contains(mimeType, "jpg") {
 		if seeker, ok := file.(io.Seeker); ok {
 			seeker.Seek(0, 0)
@@ -171,6 +182,8 @@ func extractImageMetadata(file multipart.File, mimeType string) *ImageMetadata {
 
 		x, err := exif.Decode(file)
 		if err == nil {
+			exifData = x
+
 			// Camera make and model
 			if make, err := x.Get(exif.Make); err == nil {
 				if val, err := make.StringVal(); err == nil {
@@ -180,6 +193,13 @@ func extractImageMetadata(file multipart.File, mimeType string) *ImageMetadata {
 			if model, err := x.Get(exif.Model); err == nil {
 				if val, err := model.StringVal(); err == nil {
 					metadata.Model = strings.TrimSpace(val)
+				}
+			}
+
+			// Software
+			if software, err := x.Get(exif.Software); err == nil {
+				if val, err := software.StringVal(); err == nil {
+					metadata.Software = strings.TrimSpace(val)
 				}
 			}
 
@@ -235,6 +255,9 @@ func extractImageMetadata(file multipart.File, mimeType string) *ImageMetadata {
 			}
 		}
 	}
+
+	// Perform AI detection analysis
+	metadata.AIDetection = detectAIGenerated(metadata, exifData)
 
 	// Return nil if no metadata was extracted
 	if metadata.Width == 0 && metadata.Height == 0 && metadata.Make == "" {
@@ -298,4 +321,97 @@ func extractVideoMetadata(file multipart.File) *VideoMetadata {
 	// For now, we'll return a placeholder
 	// In production, consider using ffmpeg bindings or similar
 	return nil
+}
+
+// detectAIGenerated analyzes image metadata to detect if it's likely AI-generated
+func detectAIGenerated(metadata *ImageMetadata, exifData *exif.Exif) *AIDetection {
+	detection := &AIDetection{
+		LikelyAIGenerated: false,
+		Confidence:        "low",
+		Indicators:        []string{},
+		Reasons:           []string{},
+	}
+
+	score := 0 // Scoring system to determine confidence
+
+	// Known AI generator software signatures
+	aiSoftwareKeywords := []string{
+		"midjourney", "dall-e", "dalle", "stable diffusion", "stablediffusion",
+		"leonardo", "playground", "firefly", "imagen", "craiyon",
+		"artificial", "ai generator", "deep dream", "deepdream",
+	}
+
+	// Check 1: Software field for AI generators
+	if metadata.Software != "" {
+		softwareLower := strings.ToLower(metadata.Software)
+		for _, keyword := range aiSoftwareKeywords {
+			if strings.Contains(softwareLower, keyword) {
+				detection.LikelyAIGenerated = true
+				detection.Confidence = "high"
+				detection.Indicators = append(detection.Indicators, "ai_software_detected")
+				detection.Reasons = append(detection.Reasons, fmt.Sprintf("Software field contains AI generator signature: %s", metadata.Software))
+				return detection
+			}
+		}
+	}
+
+	// Check 2: Absence of camera metadata (strong indicator)
+	if metadata.Make == "" && metadata.Model == "" {
+		score += 3
+		detection.Indicators = append(detection.Indicators, "no_camera_metadata")
+		detection.Reasons = append(detection.Reasons, "No camera make/model found in EXIF data")
+	}
+
+	// Check 3: No camera-specific technical data
+	if metadata.FocalLength == "" && metadata.ISOSpeed == 0 && metadata.Flash == "" {
+		score += 2
+		detection.Indicators = append(detection.Indicators, "no_camera_technical_data")
+		detection.Reasons = append(detection.Reasons, "No camera technical data (focal length, ISO, flash) found")
+	}
+
+	// Check 4: No GPS data (cameras often include GPS)
+	if metadata.GPS == nil && metadata.Make == "" {
+		score += 1
+		detection.Indicators = append(detection.Indicators, "no_gps_data")
+	}
+
+	// Check 5: No EXIF data at all for JPEG (highly suspicious)
+	if exifData == nil && metadata.Make == "" {
+		score += 2
+		detection.Indicators = append(detection.Indicators, "no_exif_data")
+		detection.Reasons = append(detection.Reasons, "JPEG image with no EXIF data - typical of AI-generated images")
+	}
+
+	// Check 6: DateTime but no camera data (unusual for real photos)
+	if metadata.DateTime != "" && metadata.Make == "" && metadata.Model == "" {
+		score += 1
+		detection.Indicators = append(detection.Indicators, "datetime_without_camera")
+	}
+
+	// Determine overall result based on score
+	if score >= 5 {
+		detection.LikelyAIGenerated = true
+		detection.Confidence = "high"
+		if len(detection.Reasons) == 0 {
+			detection.Reasons = append(detection.Reasons, "Multiple indicators suggest this is an AI-generated image")
+		}
+	} else if score >= 3 {
+		detection.LikelyAIGenerated = true
+		detection.Confidence = "medium"
+		if len(detection.Reasons) == 0 {
+			detection.Reasons = append(detection.Reasons, "Several indicators suggest this might be AI-generated")
+		}
+	} else if score >= 1 {
+		detection.LikelyAIGenerated = false
+		detection.Confidence = "low"
+		detection.Reasons = append(detection.Reasons, "Insufficient evidence to determine if AI-generated")
+	} else {
+		// Image has camera metadata, likely authentic
+		detection.LikelyAIGenerated = false
+		detection.Confidence = "high"
+		detection.Indicators = append(detection.Indicators, "camera_metadata_present")
+		detection.Reasons = append(detection.Reasons, "Image contains authentic camera metadata")
+	}
+
+	return detection
 }
