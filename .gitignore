@@ -48,3 +48,6 @@ temp/
 
 # Air live reload
 tmp/
+
+
+testdata/*
