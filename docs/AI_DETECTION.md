@@ -137,12 +137,18 @@ When you upload an image, the response includes an `ai_detection` field:
 }
 ```
 
+## Screenshot Detection Integration
+
+**Important**: AI detection now works in conjunction with [screenshot detection](SCREENSHOT_DETECTION.md). When an image is detected as a screenshot with high confidence, it will **not** be flagged as AI-generated, even if it lacks camera metadata.
+
+This prevents false positives for legitimate screenshots.
+
 ## Limitations
 
 1. **Not 100% Accurate**: This is a heuristic approach, not AI/ML-based detection
 2. **Can Be Fooled**: AI-generated images can have fake EXIF data added
 3. **Edited Photos**: Heavily edited photos may lose metadata and appear AI-generated
-4. **Screenshots**: Screenshots of real photos will likely be flagged as AI-generated
+4. **Screenshot Edge Cases**: While screenshot detection handles most cases, unusual screen resolutions may still be misclassified
 5. **PNG/GIF Support**: Currently optimized for JPEG; other formats have limited EXIF
 
 ## Future Enhancements

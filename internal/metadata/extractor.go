@@ -32,19 +32,20 @@ type Result struct {
 
 // ImageMetadata contains image-specific metadata
 type ImageMetadata struct {
-	Width       int          `json:"width,omitempty"`
-	Height      int          `json:"height,omitempty"`
-	ColorModel  string       `json:"color_model,omitempty"`
-	Make        string       `json:"make,omitempty"`
-	Model       string       `json:"model,omitempty"`
-	DateTime    string       `json:"datetime,omitempty"`
-	Orientation int          `json:"orientation,omitempty"`
-	Flash       string       `json:"flash,omitempty"`
-	FocalLength string       `json:"focal_length,omitempty"`
-	ISOSpeed    int          `json:"iso_speed,omitempty"`
-	GPS         *GPSData     `json:"gps,omitempty"`
-	AIDetection *AIDetection `json:"ai_detection,omitempty"`
-	Software    string       `json:"software,omitempty"`
+	Width               int                  `json:"width,omitempty"`
+	Height              int                  `json:"height,omitempty"`
+	ColorModel          string               `json:"color_model,omitempty"`
+	Make                string               `json:"make,omitempty"`
+	Model               string               `json:"model,omitempty"`
+	DateTime            string               `json:"datetime,omitempty"`
+	Orientation         int                  `json:"orientation,omitempty"`
+	Flash               string               `json:"flash,omitempty"`
+	FocalLength         string               `json:"focal_length,omitempty"`
+	ISOSpeed            int                  `json:"iso_speed,omitempty"`
+	GPS                 *GPSData             `json:"gps,omitempty"`
+	AIDetection         *AIDetection         `json:"ai_detection,omitempty"`
+	ScreenshotDetection *ScreenshotDetection `json:"screenshot_detection,omitempty"`
+	Software            string               `json:"software,omitempty"`
 }
 
 // GPSData contains GPS coordinates
@@ -60,6 +61,14 @@ type AIDetection struct {
 	Confidence        string   `json:"confidence"` // "high", "medium", "low"
 	Indicators        []string `json:"indicators,omitempty"`
 	Reasons           []string `json:"reasons,omitempty"`
+}
+
+// ScreenshotDetection contains screenshot detection results
+type ScreenshotDetection struct {
+	LikelyScreenshot bool     `json:"likely_screenshot"`
+	Confidence       string   `json:"confidence"` // "high", "medium", "low"
+	Indicators       []string `json:"indicators,omitempty"`
+	MatchedPattern   string   `json:"matched_pattern,omitempty"`
 }
 
 // AudioMetadata contains audio-specific metadata
@@ -256,7 +265,10 @@ func extractImageMetadata(file multipart.File, mimeType string) *ImageMetadata {
 		}
 	}
 
-	// Perform AI detection analysis
+	// Perform screenshot detection first
+	metadata.ScreenshotDetection = detectScreenshot(metadata)
+
+	// Perform AI detection analysis (which will consider screenshot detection)
 	metadata.AIDetection = detectAIGenerated(metadata, exifData)
 
 	// Return nil if no metadata was extracted
@@ -330,6 +342,21 @@ func detectAIGenerated(metadata *ImageMetadata, exifData *exif.Exif) *AIDetectio
 		Confidence:        "low",
 		Indicators:        []string{},
 		Reasons:           []string{},
+	}
+
+	// Check if it's a screenshot first - screenshots shouldn't be flagged as AI
+	if metadata.ScreenshotDetection != nil && metadata.ScreenshotDetection.LikelyScreenshot {
+		if metadata.ScreenshotDetection.Confidence == "high" {
+			detection.LikelyAIGenerated = false
+			detection.Confidence = "high"
+			detection.Indicators = append(detection.Indicators, "screenshot_detected")
+			detection.Reasons = append(detection.Reasons,
+				fmt.Sprintf("Image appears to be a screenshot: %s", metadata.ScreenshotDetection.MatchedPattern))
+			return detection
+		} else if metadata.ScreenshotDetection.Confidence == "medium" {
+			// Medium confidence screenshot - still check but be less aggressive
+			detection.Indicators = append(detection.Indicators, "possible_screenshot")
+		}
 	}
 
 	score := 0 // Scoring system to determine confidence
@@ -414,4 +441,175 @@ func detectAIGenerated(metadata *ImageMetadata, exifData *exif.Exif) *AIDetectio
 	}
 
 	return detection
+}
+
+// detectScreenshot analyzes image dimensions and metadata to detect screenshots
+func detectScreenshot(metadata *ImageMetadata) *ScreenshotDetection {
+	detection := &ScreenshotDetection{
+		LikelyScreenshot: false,
+		Confidence:       "low",
+		Indicators:       []string{},
+	}
+
+	if metadata.Width == 0 || metadata.Height == 0 {
+		return detection
+	}
+
+	// Common screenshot software signatures
+	screenshotSoftware := []string{
+		"screenshot", "snipping tool", "snip", "screencapture",
+		"greenshot", "lightshot", "sharex", "flameshot",
+		"spectacle", "monosnap", "skitch", "grab",
+		"macos", "windows", "android", "ios",
+	}
+
+	// Check 1: Software field for screenshot tools
+	if metadata.Software != "" {
+		softwareLower := strings.ToLower(metadata.Software)
+		for _, keyword := range screenshotSoftware {
+			if strings.Contains(softwareLower, keyword) {
+				detection.LikelyScreenshot = true
+				detection.Confidence = "high"
+				detection.Indicators = append(detection.Indicators, "screenshot_software_detected")
+				detection.MatchedPattern = fmt.Sprintf("Software: %s", metadata.Software)
+				return detection
+			}
+		}
+	}
+
+	width := metadata.Width
+	height := metadata.Height
+
+	// Common screen resolutions (width x height)
+	commonResolutions := []struct {
+		width  int
+		height int
+		name   string
+	}{
+		// HD and Full HD
+		{1280, 720, "HD 720p"},
+		{1920, 1080, "Full HD 1080p"},
+		{1366, 768, "HD 768p"},
+		{1600, 900, "HD+ 900p"},
+
+		// QHD and 4K
+		{2560, 1440, "QHD 1440p"},
+		{3840, 2160, "4K UHD"},
+		{2560, 1080, "UltraWide Full HD"},
+		{3440, 1440, "UltraWide QHD"},
+
+		// Retina and high DPI
+		{2880, 1800, "MacBook Pro 15\" Retina"},
+		{2560, 1600, "MacBook Pro 13\" Retina"},
+		{3024, 1964, "MacBook Pro 14\" Retina"},
+		{3456, 2234, "MacBook Pro 16\" Retina"},
+		{2304, 1440, "MacBook Air Retina"},
+
+		// iPad and tablets
+		{2048, 1536, "iPad Retina"},
+		{2732, 2048, "iPad Pro 12.9\""},
+		{2388, 1668, "iPad Pro 11\""},
+		{1920, 1200, "Tablet WUXGA"},
+
+		// Mobile devices
+		{1920, 1200, "Mobile Full HD"},
+		{2340, 1080, "Mobile Full HD+"},
+		{2400, 1080, "Mobile Full HD+"},
+		{1080, 2340, "Mobile Full HD+ Portrait"},
+		{1080, 2400, "Mobile Full HD+ Portrait"},
+
+		// Legacy and others
+		{1024, 768, "XGA"},
+		{1280, 1024, "SXGA"},
+		{1440, 900, "WXGA+"},
+	}
+
+	// Check 2: Exact resolution match
+	for _, res := range commonResolutions {
+		if (width == res.width && height == res.height) || (width == res.height && height == res.width) {
+			detection.LikelyScreenshot = true
+			detection.Confidence = "high"
+			detection.Indicators = append(detection.Indicators, "common_screen_resolution")
+			detection.MatchedPattern = fmt.Sprintf("%dx%d (%s)", res.width, res.height, res.name)
+			return detection
+		}
+	}
+
+	// Check 3: Common aspect ratios
+	aspectRatio := float64(width) / float64(height)
+	commonAspectRatios := []struct {
+		ratio     float64
+		name      string
+		tolerance float64
+	}{
+		{16.0 / 9.0, "16:9", 0.01},   // Most common
+		{16.0 / 10.0, "16:10", 0.01}, // MacBooks, many monitors
+		{21.0 / 9.0, "21:9", 0.01},   // Ultrawide
+		{4.0 / 3.0, "4:3", 0.01},     // Legacy, iPads
+		{3.0 / 2.0, "3:2", 0.01},     // Surface, some laptops
+		{19.5 / 9.0, "19.5:9", 0.01}, // Modern phones
+		{18.0 / 9.0, "18:9", 0.01},   // Modern phones
+	}
+
+	for _, ar := range commonAspectRatios {
+		if (aspectRatio >= ar.ratio-ar.tolerance && aspectRatio <= ar.ratio+ar.tolerance) ||
+			(1/aspectRatio >= ar.ratio-ar.tolerance && 1/aspectRatio <= ar.ratio+ar.tolerance) {
+			// Found matching aspect ratio
+
+			// Check if dimensions are "screen-like" (multiples of common values)
+			if isScreenLikeDimension(width, height) {
+				detection.LikelyScreenshot = true
+				detection.Confidence = "medium"
+				detection.Indicators = append(detection.Indicators, "screen_aspect_ratio")
+				detection.MatchedPattern = fmt.Sprintf("%dx%d (Aspect ratio: %s)", width, height, ar.name)
+				return detection
+			}
+		}
+	}
+
+	// Check 4: Scaled versions of common resolutions (e.g., 50%, 200%)
+	for _, res := range commonResolutions {
+		for _, scale := range []float64{0.5, 0.75, 1.5, 2.0} {
+			scaledW := int(float64(res.width) * scale)
+			scaledH := int(float64(res.height) * scale)
+
+			if (width == scaledW && height == scaledH) || (width == scaledH && height == scaledW) {
+				detection.LikelyScreenshot = true
+				detection.Confidence = "medium"
+				detection.Indicators = append(detection.Indicators, "scaled_screen_resolution")
+				detection.MatchedPattern = fmt.Sprintf("%dx%d (%.0f%% of %s)", width, height, scale*100, res.name)
+				return detection
+			}
+		}
+	}
+
+	return detection
+}
+
+// isScreenLikeDimension checks if dimensions are typical for screenshots
+// (multiples of 16, 32, 64, or other common pixel values)
+func isScreenLikeDimension(width, height int) bool {
+	// Check if both dimensions are multiples of common values
+	// Most screens have dimensions divisible by 8, 16, or 32
+
+	// Very large dimensions are unlikely to be screenshots
+	if width > 7680 || height > 4320 { // Larger than 8K
+		return false
+	}
+
+	// Check if dimensions are multiples of common screen pixel increments
+	commonMultiples := []int{16, 32, 64, 128}
+	for _, mult := range commonMultiples {
+		if width%mult == 0 && height%mult == 0 {
+			return true
+		}
+	}
+
+	// Check if width or height matches common DPI scales (96, 120, 144, 192)
+	// This helps identify retina/HiDPI screenshots
+	if width%96 == 0 || height%96 == 0 {
+		return true
+	}
+
+	return false
 }

@@ -5,6 +5,7 @@ import (
 	"io"
 	"mime/multipart"
 	"net/textproto"
+	"strings"
 	"testing"
 
 	"github.com/rwcarlsen/goexif/exif"
@@ -265,6 +266,247 @@ func TestDetectAIGenerated(t *testing.T) {
 			t.Logf("  AI Generated: %v (confidence: %s)", detection.LikelyAIGenerated, detection.Confidence)
 			t.Logf("  Indicators: %v", detection.Indicators)
 			t.Logf("  Reasons: %v", detection.Reasons)
+		})
+	}
+}
+
+func TestDetectScreenshot(t *testing.T) {
+	tests := []struct {
+		name               string
+		metadata           *ImageMetadata
+		expectedScreenshot bool
+		expectedConfidence string
+		expectedPattern    string
+	}{
+		{
+			name: "Full HD screenshot",
+			metadata: &ImageMetadata{
+				Width:  1920,
+				Height: 1080,
+			},
+			expectedScreenshot: true,
+			expectedConfidence: "high",
+			expectedPattern:    "1920x1080 (Full HD 1080p)",
+		},
+		{
+			name: "MacBook Pro Retina screenshot",
+			metadata: &ImageMetadata{
+				Width:  2880,
+				Height: 1800,
+			},
+			expectedScreenshot: true,
+			expectedConfidence: "high",
+			expectedPattern:    "2880x1800 (MacBook Pro 15\" Retina)",
+		},
+		{
+			name: "iPad Pro screenshot (portrait)",
+			metadata: &ImageMetadata{
+				Width:  2048,
+				Height: 2732,
+			},
+			expectedScreenshot: true,
+			expectedConfidence: "high",
+			expectedPattern:    "2732x2048 (iPad Pro 12.9\")",
+		},
+		{
+			name: "4K UHD screenshot",
+			metadata: &ImageMetadata{
+				Width:  3840,
+				Height: 2160,
+			},
+			expectedScreenshot: true,
+			expectedConfidence: "high",
+			expectedPattern:    "3840x2160 (4K UHD)",
+		},
+		{
+			name: "Screenshot with software signature",
+			metadata: &ImageMetadata{
+				Width:    1024,
+				Height:   768,
+				Software: "macOS Screenshot",
+			},
+			expectedScreenshot: true,
+			expectedConfidence: "high",
+			expectedPattern:    "Software: macOS Screenshot",
+		},
+		{
+			name: "Half-sized Full HD screenshot (scaled)",
+			metadata: &ImageMetadata{
+				Width:  960,
+				Height: 540,
+			},
+			expectedScreenshot: true,
+			expectedConfidence: "medium",
+			expectedPattern:    "960x540 (A", // Matches "Aspect ratio" since it hits that check first
+		},
+		{
+			name: "16:9 aspect ratio with screen-like dimensions",
+			metadata: &ImageMetadata{
+				Width:  1600,
+				Height: 900,
+			},
+			expectedScreenshot: true,
+			expectedConfidence: "high",
+			expectedPattern:    "1600x900 (HD+ 900p)",
+		},
+		{
+			name: "AI-generated typical size (not screenshot)",
+			metadata: &ImageMetadata{
+				Width:  1024,
+				Height: 1024,
+			},
+			expectedScreenshot: false,
+			expectedConfidence: "low",
+		},
+		{
+			name: "Camera photo resolution (not screenshot)",
+			metadata: &ImageMetadata{
+				Width:  4000,
+				Height: 3000,
+			},
+			expectedScreenshot: false,
+			expectedConfidence: "low",
+		},
+		{
+			name: "Unusual aspect ratio (not screenshot)",
+			metadata: &ImageMetadata{
+				Width:  1234,
+				Height: 567,
+			},
+			expectedScreenshot: false,
+			expectedConfidence: "low",
+		},
+		{
+			name: "Mobile screenshot (portrait)",
+			metadata: &ImageMetadata{
+				Width:  1080,
+				Height: 2340,
+			},
+			expectedScreenshot: true,
+			expectedConfidence: "high",
+			expectedPattern:    "2340x1080", // Detection normalizes to landscape orientation
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			detection := detectScreenshot(tt.metadata)
+
+			if detection == nil {
+				t.Fatal("detectScreenshot returned nil")
+			}
+
+			if detection.LikelyScreenshot != tt.expectedScreenshot {
+				t.Errorf("LikelyScreenshot = %v, want %v", detection.LikelyScreenshot, tt.expectedScreenshot)
+			}
+
+			if detection.Confidence != tt.expectedConfidence {
+				t.Errorf("Confidence = %v, want %v", detection.Confidence, tt.expectedConfidence)
+			}
+
+			if tt.expectedPattern != "" {
+				// Check pattern match safely
+				minLen := len(tt.expectedPattern)
+				if minLen > 10 {
+					minLen = 10
+				}
+				if minLen > len(detection.MatchedPattern) {
+					minLen = len(detection.MatchedPattern)
+				}
+				if minLen > 0 && !strings.Contains(detection.MatchedPattern, tt.expectedPattern[:minLen]) {
+					t.Errorf("MatchedPattern = %v, want to contain %v", detection.MatchedPattern, tt.expectedPattern)
+				}
+			}
+
+			// Log detection details for debugging
+			t.Logf("Screenshot detection for '%s':", tt.name)
+			t.Logf("  Is Screenshot: %v (confidence: %s)", detection.LikelyScreenshot, detection.Confidence)
+			t.Logf("  Matched Pattern: %s", detection.MatchedPattern)
+			t.Logf("  Indicators: %v", detection.Indicators)
+		})
+	}
+}
+
+func TestScreenshotAndAIDetectionIntegration(t *testing.T) {
+	tests := []struct {
+		name                   string
+		metadata               *ImageMetadata
+		expectedAI             bool
+		expectedAIConfidence   string
+		shouldDetectScreenshot bool
+	}{
+		{
+			name: "Screenshot should NOT be flagged as AI",
+			metadata: &ImageMetadata{
+				Width:  1920,
+				Height: 1080,
+			},
+			expectedAI:             false,
+			expectedAIConfidence:   "high",
+			shouldDetectScreenshot: true,
+		},
+		{
+			name: "AI image with typical AI dimensions",
+			metadata: &ImageMetadata{
+				Width:  1024,
+				Height: 1024,
+			},
+			expectedAI:             true,
+			expectedAIConfidence:   "high",
+			shouldDetectScreenshot: false,
+		},
+		{
+			name: "Screenshot with Midjourney software (conflicting signals)",
+			metadata: &ImageMetadata{
+				Width:    1920,
+				Height:   1080,
+				Software: "Midjourney",
+			},
+			expectedAI:             false, // Screenshot detection takes precedence with high confidence
+			expectedAIConfidence:   "high",
+			shouldDetectScreenshot: true,
+		},
+		{
+			name: "Camera photo - not screenshot, not AI",
+			metadata: &ImageMetadata{
+				Width:       4000,
+				Height:      3000,
+				Make:        "Canon",
+				Model:       "EOS R5",
+				FocalLength: "50.0mm",
+			},
+			expectedAI:             false,
+			expectedAIConfidence:   "high",
+			shouldDetectScreenshot: false,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// First detect screenshot
+			screenshotDetection := detectScreenshot(tt.metadata)
+			tt.metadata.ScreenshotDetection = screenshotDetection
+
+			// Then detect AI (which considers screenshot detection)
+			aiDetection := detectAIGenerated(tt.metadata, nil)
+
+			if aiDetection.LikelyAIGenerated != tt.expectedAI {
+				t.Errorf("AI Detection: got %v, want %v", aiDetection.LikelyAIGenerated, tt.expectedAI)
+			}
+
+			if aiDetection.Confidence != tt.expectedAIConfidence {
+				t.Errorf("AI Confidence: got %v, want %v", aiDetection.Confidence, tt.expectedAIConfidence)
+			}
+
+			if screenshotDetection.LikelyScreenshot != tt.shouldDetectScreenshot {
+				t.Errorf("Screenshot Detection: got %v, want %v", screenshotDetection.LikelyScreenshot, tt.shouldDetectScreenshot)
+			}
+
+			// Log integration results
+			t.Logf("Integration test for '%s':", tt.name)
+			t.Logf("  Screenshot: %v (confidence: %s)", screenshotDetection.LikelyScreenshot, screenshotDetection.Confidence)
+			t.Logf("  AI Generated: %v (confidence: %s)", aiDetection.LikelyAIGenerated, aiDetection.Confidence)
+			t.Logf("  AI Reasons: %v", aiDetection.Reasons)
 		})
 	}
 }
